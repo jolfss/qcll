@@ -105,26 +105,24 @@ class Tokenstring():
     def __compute_probabilities(self) -> Tensor: 
         """The per-token probabilities under the language model on this Tokenstring.
         Causally, there is no way to predict the first token, so this is set to 1.0.
-        `Tensor (1,seq)@cpu:float`"""
+        `Tensor (1,seq+1)@cpu:float`"""
         if self.output:
             probs = self.logits.softmax(dim=-1)[0,torch.arange(self.input_ids.size(-1)-1),self.input_ids[:,1:]]
             return torch.cat((torch.tensor([[1.0]]).to(self.device),probs), dim=-1).to("cpu")
         else:
-            return torch.tensor([[]],device="cpu")
+            return torch.tensor([[1.0]],device="cpu")
 
     def __compute_perplexities(self) -> Tensor:
         """The per-token perplexities under the language model on this Tokenstring.
         The first token's perplexity is defined to be `self._tokenizer.vocab_size`.
-        `Tensor (1,seq)@cpu:float`."""
+        `Tensor (1,seq+1)@cpu:float`."""
         if self.output:
             probs = self.logits.softmax(dim=-1)
             return torch.cat((torch.tensor([[self._tokenizer.vocab_size]]).to(self.device),
                                 (-probs*probs.log()).sum(dim=-1).exp()), dim=-1).to("cpu")
         else:
-            return torch.tensor([[]], device="cpu")
+            return torch.tensor([[self._tokenizer.vocab_size]], device="cpu")
 
-    # NOTE TODO: https://huggingface.co/docs/transformers/v4.41.3/en/internal/generation_utils#transformers.Cache
-    # Newer models are aiming to deprecate past_key_values and move to ^^^. Should change this soon. 
     @torch.no_grad
     def pivot(self, incoming:'str|Tokenstring') -> 'Tokenstring':
         """Align this Tokenstring's representation with the `incoming` string. If the incoming
