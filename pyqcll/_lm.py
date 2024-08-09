@@ -5,25 +5,31 @@ import copy
 #typing
 from typing import Iterator, List, Optional, Tuple, assert_never
 from torch import Tensor
-from transformers import PreTrainedModel, PreTrainedTokenizerFast, PreTrainedTokenizer
+from transformers import PreTrainedModel, PreTrainedTokenizerFast, PreTrainedTokenizer, Cache, DynamicCache
 from transformers.modeling_outputs import CausalLMOutputWithPast
+
+import logging
+logging.basicConfig(filename='logs/app.log', filemode='w', level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class Tokenstring():
     """A Tokenstring is an abstraction of strings and their tokenizations."""
     def __init__(self, model:PreTrainedModel, tokenizer:PreTrainedTokenizer|PreTrainedTokenizerFast) -> None:
-        self.__model = model
-        self.__tokenizer = tokenizer
+        self._model = model
+        self._tokenizer = tokenizer
         self._string = ""
         self._input_ids : Tensor = torch.tensor([[]]).to(self.device)
         self._logits : Tensor = torch.tensor([[[]]]).to(self.device)
         self._output : Optional[CausalLMOutputWithPast] = None
         self._probabilities : Tensor = torch.tensor([[]])
         self._perplexities : Tensor = torch.tensor([[]])
+
+        # TODO: self._cache = DynamicCache()
+        self._cache = DynamicCache()
     
     @property
     def device(self): 
         """The device this Tokenstring is on; always synced to underlying language model."""
-        return self.__model.device
+        return self._model.device
 
     @property
     def string(self) -> str:
@@ -44,7 +50,7 @@ class Tokenstring():
     def tokens(self) -> List[str]:
         """The tokenization (as strings) of this Tokenstring.
         `List (seq)`"""
-        return list(self.__tokenizer.convert_ids_to_tokens(self.input_ids.flatten().tolist()))
+        return list(self._tokenizer.convert_ids_to_tokens(self.input_ids.flatten().tolist()))
     
     @property
     def word_count(self) -> int:
@@ -55,14 +61,14 @@ class Tokenstring():
     def output(self) -> Optional[CausalLMOutputWithPast]:
         """The model output on this Tokenstring or None if this Tokenstring is empty."""
         return self._output
-
+    
     @property
     def logits(self) -> Tensor:
         """The logits/activations of the model on this Tokenstring.
         `Tensor (1,seq,dim)@device:float`"""
         assert self._logits.device == self.device
         return self._logits
-
+    
     @property
     def probabilities(self) -> Tensor:
         """TODO: Docs"""
@@ -85,11 +91,11 @@ class Tokenstring():
 
     def compute_perplexities(self) -> Tensor:
         """The per-token perplexities under the language model on this Tokenstring.
-        The first token's perplexity is defined to be `self.__tokenizer.vocab_size`.
+        The first token's perplexity is defined to be `self._tokenizer.vocab_size`.
         `Tensor (1,seq)@cpu:float`."""
         if self.output:
             probs = self.logits.softmax(dim=-1)
-            return torch.cat((torch.tensor([[self.__tokenizer.vocab_size]]).to(self.device),
+            return torch.cat((torch.tensor([[self._tokenizer.vocab_size]]).to(self.device),
                                 (-probs*probs.log()).sum(dim=-1).exp()), dim=-1).to("cpu")
         else:
             return torch.tensor([[]], device="cpu")
@@ -120,7 +126,7 @@ class Tokenstring():
                 pass
             case str() as next:
                 self._string = next
-                next_input = self.__tokenizer(next, return_tensors="pt").to(self.device)
+                next_input = self._tokenizer(next, return_tensors="pt").to(self.device)
                 next_attn = next_input["attention_mask"]
                 next_ids = next_input["input_ids"] # type:ignore (c.f. assert)
                 assert type(next_ids) == Tensor
@@ -143,7 +149,7 @@ class Tokenstring():
                                                for key_value in layer)
                                                for layer in self.output.past_key_values]
                     if new_ids.size(-1) > 0:
-                        self._output = self.__model(input_ids=new_ids,
+                        self._output = self._model(input_ids=new_ids,
                                                     attention_mask=next_attn, 
                                                     past_key_values=past_key_values, 
                                                     use_cache=True)
@@ -151,7 +157,7 @@ class Tokenstring():
                     else:
                         self._logits = self.logits[:,:same_until]
                 else:
-                    self._output = self.__model(**next_input.to(self.device),
+                    self._output = self._model(**next_input.to(self.device),
                                                 use_cache=True)
                     assert self.output is not None
                     self._logits = self.output.logits
@@ -159,8 +165,8 @@ class Tokenstring():
                 self._perplexities = self.compute_perplexities()
             case Tokenstring() as ts:
                 #pass reference
-                self.__model     = ts.__model
-                self.__tokenizer = ts.__tokenizer
+                self._model     = ts._model
+                self._tokenizer = ts._tokenizer
                 #copy fields
                 self._string    = ts._string
                 self._input_ids = ts._input_ids.clone()
@@ -184,7 +190,7 @@ class Tokenstring():
 
     def clone(self) -> 'Tokenstring':
         """Initialize a new instance of a Tokenstring using `self` as a template."""
-        return Tokenstring(self.__model, self.__tokenizer).pivot(self)
+        return Tokenstring(self._model, self._tokenizer).pivot(self)
     def __deepcopy__(self, memo) -> 'Tokenstring':
         memo[id(self)] = (clone:=self.clone())
         return clone
@@ -205,3 +211,29 @@ class Tokenstring():
     def __len__(self) -> int:
         """The `__len__` of a Tokenstring is the number of tokens in its tokenization."""
         return len(self.tokens) 
+    
+
+if __name__ == "__main__":
+    import os
+    from huggingface_hub import login
+    import transformers
+
+    try:
+        login(os.environ["HF_TOKEN"])
+    except KeyError:
+        print("WARNING: HF_TOKEN environment variable not set.")
+
+    device, model_name= [
+        (torch.device("cuda"), "gpt2-xl"),
+        (torch.device("cpu"), "meta-llama/Meta-Llama-3.1-8B"),
+        (torch.device("cpu"), "meta-llama/Llama-2-7b-chat-hf"),
+        ][1]
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+    model = transformers.AutoModelForCausalLM.from_pretrained(model_name)
+    model.eval()
+    model.to(device)
+
+    tokenstring = Tokenstring(model,tokenizer).pivot("Þþöð")
+    for token, prob, perp in tokenstring:
+        print(token)
+    breakpoint()

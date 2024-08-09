@@ -1,6 +1,8 @@
 from blessed import Terminal
 from blessed.keyboard import Keystroke
 
+### LOGGING
+
 #------------#
 #   Typing   #
 #------------#
@@ -30,7 +32,7 @@ class Mode(Enum): MENU, PLAYGROUND, EXIT = range(3)
 import torch
 import transformers
 from huggingface_hub import login
-from lm import Tokenstring
+from tokenstring import Tokenstring
 ### Misc.
 import os
 import numpy as np
@@ -41,18 +43,21 @@ try:
 except KeyError:
     print("WARNING: HF_TOKEN environment variable not set.")
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 device, model_name= [
-    (torch.device("cpu"), "meta-llama/Meta-Llama-3.1-8B"),
     (torch.device("cuda"), "gpt2-xl"),
+    (torch.device("cpu"), "meta-llama/Meta-Llama-3.1-8B"),
     (torch.device("cpu"), "meta-llama/Llama-2-7b-chat-hf"),
     ][0]
 tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
 model = transformers.AutoModelForCausalLM.from_pretrained(model_name)
 model.eval()
 model.to(device)
+cache = transformers.DynamicCache()
 
 ### App State
-blocks : List[Tokenstring] = [Tokenstring(model, tokenizer)]
+blocks : List[Tokenstring] = [Tokenstring(model, tokenizer, cache)]
 cur_id : int = 0
 cur_pos : int = 0
 
@@ -74,7 +79,7 @@ def ratify():
 def push_block():
     global model, tokenizer
     global blocks, cur_id, cur_pos
-    blocks.append(Tokenstring(model, tokenizer))
+    blocks.append(Tokenstring(model, tokenizer, transformers.DynamicCache()))
     cur_id = len(blocks) - 1
     cur_pos = 0
 
@@ -165,14 +170,13 @@ def draw_playground(term:Terminal):
     _completed = False
     for tokenstring in reversed(get_preview()): 
         # add highlighting
-        flush(term.color_rgb(220,220,220) if _block_number-1 == cur_id else term.color_rgb(200,200,30))
+        flush(term.color_rgb(220,220,220) if _block_number-1 == cur_id else term.color_rgb(150,150,130))
         color = ""
         for token, prob, perp in tokenstring:
             token = token.replace("Ġ"," ")
-            score = int(max(0, min(1/(prob*perp), 255-BG[0])))
-            color += term.on_color_rgb(BG[0]+score, BG[1], BG[2]) + token 
+            score = 1/(prob*perp)
+            color += term.on_color_rgb(BG[0]+max(BG[0],min(255,int(score))), BG[1], BG[2]) + F"{token}"#({int(np.log2(score))})" 
         color += term.on_color_rgb(*BG)
-        
         # wrap and center
         color_wrap = term.wrap(color, term.width - 2*SIDE_PAD, drop_whitespace=False)
         _last_line = color_wrap[-1] if _last_line is None else _last_line
