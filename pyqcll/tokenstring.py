@@ -4,7 +4,7 @@ import torch
 import copy
 import warnings
 #typing
-from typing import Iterator, List, Optional, Tuple, assert_never
+from typing import Iterable, Iterator, List, Optional, Tuple, assert_never
 from torch import Tensor
 from transformers import PreTrainedModel, PreTrainedTokenizerFast, PreTrainedTokenizer, DynamicCache
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -101,34 +101,35 @@ class Tokenstring():
     
     @property
     def probabilities(self) -> Tensor:
-        """The per-token probabilities as computed by `self.__compute_probabilities`."""
+        """The per-token perplexities under the language model on this Tokenstring.
+        The first token's perplexity is defined to be `self._tokenizer.vocab_size`.
+        `Tensor (1,seq+1)@cpu:float`."""
         return self._probabilities
-
-    @property
-    def perplexities(self) -> Tensor:
-        """The per-token perplexities as computed by `self.__compute_perplexities`."""
-        return self._perplexities
-    
     def __compute_probabilities(self) -> Tensor: 
-        """The per-token probabilities under the language model on this Tokenstring.
-        Causally, there is no way to predict the first token, so this is set to 1.0.
-        `Tensor (1,seq+1)@cpu:float`"""
         if self.output:
             probs = self.logits.softmax(dim=-1)[0,torch.arange(self.input_ids.size(-1)-1),self.input_ids[:,1:]]
             return torch.cat((torch.tensor([[1.0]]).to(self.device),probs), dim=-1).to("cpu")
         else:
             return torch.tensor([[1.0]],device="cpu")
 
-    def __compute_perplexities(self) -> Tensor:
+    @property
+    def perplexities(self) -> Tensor:
         """The per-token perplexities under the language model on this Tokenstring.
         The first token's perplexity is defined to be `self._tokenizer.vocab_size`.
         `Tensor (1,seq+1)@cpu:float`."""
+        return self._perplexities
+    def __compute_perplexities(self) -> Tensor:
         if self.output:
             probs = self.logits.softmax(dim=-1)
             return torch.cat((torch.tensor([[self._tokenizer.vocab_size]]).to(self.device),
                                 (-probs*probs.log()).sum(dim=-1).exp()), dim=-1).to("cpu")
         else:
             return torch.tensor([[self._tokenizer.vocab_size]], device="cpu")
+    
+    @property
+    def branch(self) -> float:
+        """The branching factor over the tokens which can succeed this Tokenstring."""
+        return self.perplexities[0][-1].item()
 
     @torch.no_grad
     def pivot(self, incoming:'str|Tokenstring') -> 'Tokenstring':
@@ -209,17 +210,29 @@ class Tokenstring():
         self.string = self.string[:-num_popped]
         return self
 
-    def continuation_probs(self, completions:str|List[str]) -> float|List[float]:
+    def top_k(self, k:int) -> Iterable[Tuple[str, float]]:
+        """Computes the `k` most likely tokens and their probabilities to continue `self`."""
+        probs = self.logits[:,-1,:].softmax(dim=-1)
+        top_k_probs, top_k_indices = torch.topk(probs, k) 
+
+        top_k_probs = top_k_probs.flatten().tolist()
+        top_k_indices = top_k_indices.flatten().tolist()
+
+        top_k = self._tokenizer.convert_ids_to_tokens(top_k_indices)
+        return zip(top_k, top_k_probs)
+
+    def completion_probs(self, completions:str|List[str]) -> float|List[float]:
         """Computes the probability of all completions appended to this Tokenstring.
         Since it is possible that the append changes the prior tokenization of the Tokenstring, the
-        probability computed is the product of probabilities of all tokens not in the original."""
+        probability computed is the product of probabilities of all tokens not in the original.
+        TODO: Parallelize completions."""
         orig_tokens = self.tokens
         continuer = self.clone()
         match completions:
             case str() as completion:
                 # pivot to the completion
                 continuer.append(completion)
-                cont_tokens = self.tokens
+                cont_tokens = continuer.tokens
 
                 # find first point of difference
                 same_until = 0
@@ -230,15 +243,15 @@ class Tokenstring():
 
                 prod = 1.0
                 # compute product of new token probabilities
-                for prob in continuer.probabilities[same_until:]:
-                    prod *= prob.item()
+                for prob in continuer.probabilities[0][same_until:]:
+                    prod = prod * prob.item()
 
                 # revert state
                 continuer.pivot(self)
                 return prod
 
             case list():
-                return list(map(lambda s: self.continuation_prob(s), completions)) # type: ignore
+                return list(map(lambda s: self.completion_probs(s), completions)) # type: ignore
 
             case _ as x:
                 assert_never(x)
