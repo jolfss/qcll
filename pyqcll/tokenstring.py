@@ -191,15 +191,16 @@ class Tokenstring():
                 assert_never(unreachable)
         return self
 
-    def append(self, incoming:str):
-        """Append `incoming` to the end of this Tokenstring."""
+    def append(self, incoming:str) -> 'Tokenstring':
+        """Append `incoming` to the end of this Tokenstring and return `self`."""
         self.string = self.string + incoming
+        return self
 
-    def pop(self, num_popped:int) -> str:
-        """Remove and return `num_popped` characters from the end of this Tokenstring."""
+    def pop(self, num_popped:int) -> 'Tokenstring':
+        """Remove `num_popped` characters from this Tokenstring and return `self`."""
         popped = self.string[-num_popped:]
         self.string = self.string[:-num_popped]
-        return popped
+        return self
 
     def clone(self) -> 'Tokenstring':
         """Initialize a new instance of a Tokenstring using `self` as a template."""
@@ -224,29 +225,3 @@ class Tokenstring():
     def __len__(self) -> int:
         """The `__len__` of a Tokenstring is the number of tokens in its tokenization."""
         return len(self.tokens) 
-
-if __name__ == "__main__":
-    import os
-    from huggingface_hub import login
-    import transformers
-
-    try:
-        login(os.environ["HF_TOKEN"])
-    except KeyError:
-        print("WARNING: HF_TOKEN environment variable not set.")
-
-    device, model_name= [
-        (torch.device("cuda"), "gpt2-xl"),
-        (torch.device("cpu"), "meta-llama/Meta-Llama-3.1-8B"),
-        (torch.device("cpu"), "meta-llama/Llama-2-7b-chat-hf"),
-        ][1]
-    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
-    model = transformers.AutoModelForCausalLM.from_pretrained(model_name)
-    model.eval()
-    model.to(device)
-    cache = DynamicCache()
-
-    tokenstring = Tokenstring(model,tokenizer, cache).pivot("Hello").pivot("Hello there")
-    for token, prob, perp in tokenstring:
-        print(token)
-    breakpoint()

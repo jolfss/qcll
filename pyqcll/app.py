@@ -28,35 +28,14 @@ class Mode(Enum): MENU, PLAYGROUND, EXIT = range(3)
 #-------------#
 #   Globals   #
 #-------------#
-### Language Model
-import torch
-import transformers
-from huggingface_hub import login
 from tokenstring import Tokenstring
-### Misc.
-import os
-import numpy as np
-import time
-
-try:
-    login(os.environ["HF_TOKEN"])
-except KeyError:
-    print("WARNING: HF_TOKEN environment variable not set.")
-
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-device, model_name= [
-    (torch.device("cuda"), "gpt2-xl"),
-    (torch.device("cpu"), "meta-llama/Meta-Llama-3.1-8B"),
-    (torch.device("cpu"), "meta-llama/Llama-2-7b-chat-hf"),
-    ][0]
-tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
-model = transformers.AutoModelForCausalLM.from_pretrained(model_name)
-model.eval()
-model.to(device)
+import transformers
+from utils import setup_lm_and_tokenizer
+model, tokenizer = setup_lm_and_tokenizer()
+model_name = model.name_or_path
 cache = transformers.DynamicCache()
 
-### App State
+# app state
 blocks : List[Tokenstring] = [Tokenstring(model, tokenizer, cache)]
 cur_id : int = 0
 cur_pos : int = 0
