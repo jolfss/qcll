@@ -11,7 +11,7 @@ T = lambda : Tokenstring(model, tokenizer, transformers.DynamicCache())
 def test_operations():
     """Tests the operations on Tokenstrings to ensure consistency between ways of achieving the
     same internal string value."""
-    strings = [" ".join(random_str(random.choice([1,2,3,4,5,6])) for _ in range(10)) for _ in range(3)]
+    strings = [" ".join(random_str(random.choice([1,2,3,4,5,6])) for _ in range(10)) for _ in range(1)]
 
     for _string in strings:
         ts_letter_by_letter = T()

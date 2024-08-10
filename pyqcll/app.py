@@ -1,8 +1,6 @@
 from blessed import Terminal
 from blessed.keyboard import Keystroke
 
-### LOGGING
-
 #------------#
 #   Typing   #
 #------------#
@@ -233,7 +231,7 @@ def main():
                         else:#arrow == Arrow.RIGHT:
                             ...
                     case Unsupported(key):
-                        print(F"<UNSUPPORTED:{key.code}>", end="")
+                        continue
                     case Empty():
                         continue
                     case _ as x:

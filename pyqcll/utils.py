@@ -10,8 +10,8 @@ def setup_lm_and_tokenizer(model_id:int=0) -> Tuple[PreTrainedModel,PreTrainedTo
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
     device, model_name= [
-        (torch.device("cuda"), "gpt2-xl"),
         (torch.device("cpu"), "meta-llama/Meta-Llama-3.1-8B"),
+        (torch.device("cuda"), "gpt2-xl"),
         (torch.device("cpu"), "meta-llama/Llama-2-7b-chat-hf"),
         ][model_id]
 

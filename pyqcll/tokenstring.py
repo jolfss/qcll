@@ -2,14 +2,12 @@
 #imports
 import torch
 import copy
+import warnings
 #typing
 from typing import Iterator, List, Optional, Tuple, assert_never
 from torch import Tensor
 from transformers import PreTrainedModel, PreTrainedTokenizerFast, PreTrainedTokenizer, DynamicCache
 from transformers.modeling_outputs import CausalLMOutputWithPast
-
-import logging
-logging.basicConfig(filename='logs/app.log', filemode='w', level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class Tokenstring():
     """A Tokenstring is an abstraction of strings and their tokenizations."""
@@ -22,9 +20,9 @@ class Tokenstring():
 
         self._cache : Optional[DynamicCache] = cache
         if self._model._supports_cache_class and cache is None:
-            logging.warning("No cache was provided but the model supports a cache class.")
+            warnings.warn("No cache was provided but the model supports a cache class.")
         elif not self._model._supports_cache_class and cache is not None:
-            logging.warning("A cache was provided but the model does not support a cache class; setting to none")
+            warnings.warn("A cache was provided but the model does not support a cache class; setting to none")
             self._cache = None
 
         self._output : Optional[CausalLMOutputWithPast] = None
@@ -74,23 +72,32 @@ class Tokenstring():
         `Tensor (1,seq,dim)@device:float`"""
         assert self._logits.device == self.device
         return self._logits
-    
-    @property
-    def is_using_cache(self) -> bool:
-        return self._model._supports_cache_class and self._cache is not None
 
-    def past_key_values(self, up_to:int) -> DynamicCache|List[Tuple[Tensor, ...]]:
-        "TODO: Docs"
+    @property
+    def cache(self) -> DynamicCache|List[Tuple[Tensor, ...]]:
+        """The previous key-value states of the model. If using a cache, returns the `DynamicCache` \
+        instance, otherwise returns a `(layer,)` List of key-value tuples. Each item in the tuples \
+        is a `Tensor(...,seq,dim)@device:float`. The elided dims are usually `(batch,heads,)`.""" 
+        if self._cache is not None:
+            return self._cache
         assert self.output is not None
         assert self.output.past_key_values is not None
-        if self.is_using_cache:
-            assert self._cache is not None
+        return [tuple(key_value for key_value in layer) for layer in self.output.past_key_values]
+    
+    def cropped_cache(self, up_to:int) -> DynamicCache|List[Tuple[Tensor,...]]:
+        """Get the internal past_key_values states of the first `up_to` tokens, cropping the rest. 
+        If using a cache, also mutates the cache, otherwise returns a tuncated view.\n
+        See: `Tokenstring.cache` for shape of non-cache structure.
+        See: `DynamicCache.crop()`"""
+        if self._cache is not None:
             self._cache.crop(up_to)
             return self._cache
         else:
-            return [tuple(key_value[:,:,:up_to,:]
-                          for key_value in layer)
-                          for layer in self.output.past_key_values]
+            assert self.output is not None
+            assert self.output.past_key_values is not None
+            return [tuple(key_value[...,:up_to,:]
+                            for key_value in layer)
+                            for layer in self.output.past_key_values]
     
     @property
     def probabilities(self) -> Tensor:
@@ -133,7 +140,7 @@ class Tokenstring():
                 self._string = "" 
                 self._input_ids = torch.tensor([[]]).to(self.device)
                 self._logits = torch.tensor([[[]]]).to(self.device)
-                self.past_key_values(up_to=0)
+                self.cropped_cache(up_to=0) # mutates
                 self._output = None
                 self._perplexities = torch.tensor([[]]).to(self.device)
                 self._probabilities = torch.tensor([[]]).to(self.device)
@@ -148,8 +155,8 @@ class Tokenstring():
 
                 # find first point of difference
                 same_until = 0
-                for id, n_id in zip(self.input_ids.flatten().tolist(),next_ids.flatten().tolist()):
-                    if id != n_id: 
+                for id, nid in zip(self.input_ids.flatten().tolist(),next_ids.flatten().tolist()):
+                    if id != nid: 
                         break
                     same_until += 1
                 
@@ -160,7 +167,7 @@ class Tokenstring():
                 # update efficiently
                 if self.output is not None:
                     assert self.output.past_key_values; assert self.output.logits is not None
-                    past_key_values = self.past_key_values(up_to=same_until)
+                    past_key_values = self.cropped_cache(up_to=same_until)
                     if new_ids.size(-1) > 0:
                         self._output = self._model(input_ids=new_ids,attention_mask=next_attn, 
                                                     past_key_values=past_key_values, use_cache=True)
@@ -201,6 +208,41 @@ class Tokenstring():
         popped = self.string[-num_popped:]
         self.string = self.string[:-num_popped]
         return self
+
+    def continuation_probs(self, completions:str|List[str]) -> float|List[float]:
+        """Computes the probability of all completions appended to this Tokenstring.
+        Since it is possible that the append changes the prior tokenization of the Tokenstring, the
+        probability computed is the product of probabilities of all tokens not in the original."""
+        orig_tokens = self.tokens
+        continuer = self.clone()
+        match completions:
+            case str() as completion:
+                # pivot to the completion
+                continuer.append(completion)
+                cont_tokens = self.tokens
+
+                # find first point of difference
+                same_until = 0
+                for id1, id2 in zip(orig_tokens, cont_tokens):
+                    if id1 != id2: 
+                        break
+                    same_until += 1
+
+                prod = 1.0
+                # compute product of new token probabilities
+                for prob in continuer.probabilities[same_until:]:
+                    prod *= prob.item()
+
+                # revert state
+                continuer.pivot(self)
+                return prod
+
+            case list():
+                return list(map(lambda s: self.continuation_prob(s), completions)) # type: ignore
+
+            case _ as x:
+                assert_never(x)
+
 
     def clone(self) -> 'Tokenstring':
         """Initialize a new instance of a Tokenstring using `self` as a template."""
