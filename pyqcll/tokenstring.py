@@ -1,4 +1,7 @@
-"""This module encapsulates language modeling features."""
+"""
+Author: Sean Brynjólfsson
+A `Tokenstring` is a string-like class for syncing tokenizations, embeddings, and hidden states given a LLM and a string.
+"""
 #imports
 import torch
 import copy
@@ -10,7 +13,11 @@ from transformers import PreTrainedModel, PreTrainedTokenizerFast, PreTrainedTok
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 class Tokenstring():
-    """A Tokenstring is an abstraction of strings and their tokenizations."""
+    """
+    A `Tokenstring` is a helpful string-like class for keeping the tokenization, embeddings, and hidden states synced up with the
+    string contained. Operational semantics (like slicing and indexing) are NOT forwarded to the underlying string, but the class
+    will reflect assignments made to the string.
+    """
     def __init__(self, model:PreTrainedModel, tokenizer:PreTrainedTokenizer|PreTrainedTokenizerFast, cache:Optional[DynamicCache]) -> None:
         self._model = model
         self._tokenizer = tokenizer
